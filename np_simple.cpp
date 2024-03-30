@@ -18,7 +18,7 @@ using namespace std;
 
 #define PROCESS_LIMIT 512
 #define _DEBUG_ 0
-#define SERV_TCP_PORT 7001
+#define SERV_TCP_PORT 7002
 #define MAXLINE 512
 
 int timestamp;
@@ -354,7 +354,6 @@ void runNpShell() {
     vector<string> cmdSplit;
     init();
     int n;
-    cout << "% ";
     while (true) {
         n = read(0, cmd, MAXLINE);
         if (n <= 0) break;
@@ -383,7 +382,7 @@ void runNpShell() {
             CmdProcess(cmdSplit);
             timestamp--;
         }
-        cout << "% ";
+        std::cout << "% ";
         timestamp++;
     }
 }
@@ -412,11 +411,16 @@ int main(int argc, char *argv[]) {
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     serv_addr.sin_port = htons(SERV_TCP_PORT);
     
-    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-        cerr << "server: can't bind local address" << endl;
+    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+        perror("bind");
+        exit(1);
+    }
 
     // the second argument is backlog defines the maximum length for the queue of pending connections.
-    listen(sockfd, 3);
+    if (listen(sockfd, 3) < 0) {
+        perror("listen");
+        exit(1);
+    }
 
     for ( ; ; ) {
         clilen = sizeof(cli_addr);
@@ -428,7 +432,7 @@ int main(int argc, char *argv[]) {
         // close(sockfd);
         dup2(newsockfd, STDIN_FILENO);
         dup2(newsockfd, STDOUT_FILENO);
-        dup2(newsockfd, STDERR_FILENO);
+        // dup2(newsockfd, STDERR_FILENO);
         runNpShell();
         dup2(4, 0);
 		dup2(5, 1);
