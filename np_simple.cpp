@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/socket.h>
 
 // this is for open file for file descriptor
 #include <fcntl.h>
@@ -18,7 +19,7 @@ using namespace std;
 
 #define PROCESS_LIMIT 512
 #define _DEBUG_ 0
-#define SERV_TCP_PORT 7002
+#define SERV_TCP_PORT 7001
 #define MAXLINE 512
 
 int timestamp;
@@ -352,11 +353,10 @@ void CmdProcess(vector<string> cmdSplit) {
 void runNpShell() {
     char cmd[MAXLINE];
     vector<string> cmdSplit;
-    init();
     int n;
-    while (true) {
-        n = read(0, cmd, MAXLINE);
-        if (n <= 0) break;
+    init();
+    cout << "% ";
+    while (read(0, cmd, MAXLINE)) {
         cmdSplit = splitLineSpace(cmd);
         if (cmdSplit.size() == 0)
             continue;
@@ -382,24 +382,23 @@ void runNpShell() {
             CmdProcess(cmdSplit);
             timestamp--;
         }
-        std::cout << "% ";
+        cout << "% ";
         timestamp++;
     }
 }
 
-
 void init() {
     clearenv();
+    cout.setf(ios::unitbuf);
     setenv("PATH", "bin:.", 1);
     timestamp = 0;
 }
 
 int main(int argc, char *argv[]) {
-
-    int sockfd, newsockfd, clilen, childpid;
+    int sockfd, newsockfd;
     struct sockaddr_in cli_addr,serv_addr;
 
-    int val = 1, len = sizeof(val), n;
+    socklen_t clilen;
 
     if ( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         cerr << "server: can't open stream socket" << endl;
@@ -410,7 +409,7 @@ int main(int argc, char *argv[]) {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     serv_addr.sin_port = htons(SERV_TCP_PORT);
-    
+
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
         perror("bind");
         exit(1);
@@ -421,23 +420,22 @@ int main(int argc, char *argv[]) {
         perror("listen");
         exit(1);
     }
-
+    
     for ( ; ; ) {
         clilen = sizeof(cli_addr);
         dup2(0, 4);
-		dup2(1, 5);
-		dup2(2, 6);
-        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, (socklen_t *) &clilen);
+        dup2(1, 5);
+        dup2(2, 6);
+        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd < 0) cerr << "server: accept error" << endl;
-        // close(sockfd);
-        dup2(newsockfd, STDIN_FILENO);
-        dup2(newsockfd, STDOUT_FILENO);
-        // dup2(newsockfd, STDERR_FILENO);
+        dup2(newsockfd, 0);
+        dup2(newsockfd, 1);
+        dup2(newsockfd, 2);
         runNpShell();
         dup2(4, 0);
-		dup2(5, 1);
-		dup2(6, 2);
-        close(newsockfd); /* parent process */
+        dup2(5, 1);
+        dup2(6, 2);
+        close(newsockfd);
     }
     return 0;
 }
