@@ -19,11 +19,11 @@ using namespace std;
 
 #define PROCESS_LIMIT 512
 #define _DEBUG_ 0
-#define SERV_TCP_PORT 7001
 #define MAXLINE 512
 
 int timestamp;
 int status;
+int SERV_TCP_PORT = 7001;
 
 struct PipeFd {
     vector<pid_t> PipeFromPids;
@@ -371,7 +371,7 @@ void runNpShell() {
                 cout << getenv(PATH.c_str()) << endl;
         }
         else if (BIN == "exit") {
-            exit(0);
+            return;
         }
         else if (BIN == "setenv") {
             if (PATH == "" || third == "")
@@ -397,13 +397,22 @@ void init() {
 int main(int argc, char *argv[]) {
     int sockfd, newsockfd;
     struct sockaddr_in cli_addr,serv_addr;
-
     socklen_t clilen;
+    
+    bool opt = true;
+    socklen_t optlen = sizeof(bool);
 
+    if (argc > 1) {
+        string port = argv[1];
+        if (stoi(port)) {
+            SERV_TCP_PORT = stoi(port);
+        }
+    }
     if ( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         cerr << "server: can't open stream socket" << endl;
         return 0;
     }
+    setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR|SO_REUSEPORT,&opt,optlen);
 
     bzero(&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
