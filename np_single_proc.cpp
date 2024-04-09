@@ -21,9 +21,13 @@ using namespace std;
 #define _DEBUG_ 0
 #define BUFSIZE 4096
 
-int timestamp;
 int status;
 int SERV_TCP_PORT = 7001;
+
+struct PipeFd {
+    vector<pid_t> PipeFromPids;
+    int PipeFdNumber[2] = {-1, -1};
+};
 
 struct Client {
     char IP[INET_ADDRSTRLEN];
@@ -32,11 +36,8 @@ struct Client {
     int SOCK = -1;
     map<string, string> envs;
     string username = "(no name)";
-};
-
-struct PipeFd {
-    vector<pid_t> PipeFromPids;
-    int PipeFdNumber[2] = {-1, -1};
+    map<int, PipeFd> PIPEMAP;
+    int timestamp = 0;
 };
 
 struct CMDtype {
@@ -50,7 +51,6 @@ struct CMDtype {
     bool Is_NumPipeCmd = false;
     string CmdStr = "";
 };
-map<int, PipeFd> PIPEMAP;
 
 // key is client user id
 map<int, Client> CLIENTMAP;
@@ -88,6 +88,14 @@ bool isFileRedirectCmd(string Cmd) {
         return true;
     return false;
 }
+
+string vector2String(vector<string> v, int fromwhere = 0) {
+    string v2s = v[fromwhere];
+    for (int i = fromwhere + 1; i < v.size(); i++) {
+        v2s += (" " + v[i]);
+    }
+    return v2s;
+} 
 
 vector<string> splitEachCmd2GeneralOrNonOrNumPipeCmds(string eachCmd) {
     vector<string> PerNonNumPipeCmd;
@@ -202,11 +210,8 @@ int getPipeTimes(string cmdLine) {
 }
 
 void BroadcastMessage(string msg) {
-    char bmsg[BUFSIZE];
-    memset(bmsg, 0, BUFSIZE);
-    strcpy(bmsg, msg.c_str());
     for (auto cmap : CLIENTMAP) {
-        if (write(cmap.second.SOCK, bmsg, BUFSIZE) < 0) {
+        if (write(cmap.second.SOCK, msg.c_str(), sizeof(char) * msg.length()) < 0) {
             perror("write");
         }
     }
@@ -241,7 +246,7 @@ CMDtype pareseOneCmd(string Cmd) {
     return CmdPack;
 }
 
-void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[]) {
+void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[]) {
     int fd;
 
     // set exec stdIN
@@ -257,9 +262,9 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
 
     // set exec stdOUT
     if (OneCmdPack.Is_NumPipeCmd) {
-        dup2(PIPEMAP[timestamp + OneCmdPack.PipeN].PipeFdNumber[1], STDOUT_FILENO);
+        dup2(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp + OneCmdPack.PipeN].PipeFdNumber[1], STDOUT_FILENO);
         if (OneCmdPack.Is_StdError) 
-            dup2(PIPEMAP[timestamp + OneCmdPack.PipeN].PipeFdNumber[1], STDERR_FILENO);
+            dup2(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp + OneCmdPack.PipeN].PipeFdNumber[1], STDERR_FILENO);
     }
     else if (OneCmdPack.Is_FileReDirection) {
         fd = open(OneCmdPack.writePath.c_str(), O_WRONLY | O_TRUNC | O_CREAT, 0777);
@@ -278,7 +283,7 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
     }
 
     // Close Number Pipe
-    for (auto numberpipe : PIPEMAP) {
+    for (auto numberpipe : CLIENTMAP[clientID].PIPEMAP) {
         close(numberpipe.second.PipeFdNumber[0]);
         close(numberpipe.second.PipeFdNumber[1]);
     }
@@ -294,7 +299,7 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
     exit(0);
 }
 
-void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes) {
+void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes) {
     waitpid(-1, &status, WNOHANG);
     if (CmdNumber > 0) {
         close(CmdPipeList[(CmdNumber - 1) * 2]);
@@ -302,12 +307,12 @@ void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pip
     }
     
     // close and wait numbered pipe
-    if (PIPEMAP.find(timestamp) != PIPEMAP.end()) {
+    if (CLIENTMAP[clientID].PIPEMAP.find(CLIENTMAP[clientID].timestamp) != CLIENTMAP[clientID].PIPEMAP.end()) {
         // for (pid_t pid : PIPEMAP[timestamp].PipeFromPids)
         //     waitpid(pid, NULL, 0);
-        close(PIPEMAP[timestamp].PipeFdNumber[0]);
-        close(PIPEMAP[timestamp].PipeFdNumber[1]);
-        PIPEMAP.erase(timestamp);
+        close(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[0]);
+        close(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[1]);
+        CLIENTMAP[clientID].PIPEMAP.erase(CLIENTMAP[clientID].timestamp);
     }
 }
 
@@ -322,7 +327,7 @@ void who(int ID) {
             msg = msg + to_string(cmap.second.ID) + '\t' + cmap.second.username + '\t' + cmap.second.IP + ":" + to_string(cmap.second.INPort) + "\n";
         }
     }
-    write(CLIENTMAP[ID].SOCK, msg.c_str(), BUFSIZE);
+    write(CLIENTMAP[ID].SOCK, msg.c_str(), sizeof(char) * msg.length());
 }
 
 // Process tell command
@@ -335,7 +340,7 @@ void tell(int fromID, int toWhoID, string msg) {
     // Find and send msg to specific client
     else {
         string retMsg = "*** " + CLIENTMAP[fromID].username + " told you ***: " + msg + "\n";
-        write(CLIENTMAP[toWhoID].SOCK, retMsg.c_str(), BUFSIZE);
+        write(CLIENTMAP[toWhoID].SOCK, retMsg.c_str(), sizeof(char) * retMsg.length());
     }
 }
 
@@ -357,7 +362,7 @@ void name(int userID, string newname) {
     }
     if (repeat) {
         string msg = "*** User '" + newname + "' already exists. ***\n";
-        write(CLIENTMAP[userID].SOCK, msg.c_str(), BUFSIZE);
+        write(CLIENTMAP[userID].SOCK, msg.c_str(), sizeof(char) * msg.length());
     }
     else {
         string IP_ = CLIENTMAP[userID].IP;
@@ -367,7 +372,7 @@ void name(int userID, string newname) {
     }
 }
 
-void CmdProcess(vector<string> cmdSplit) {
+void CmdProcess(int clientID, vector<string> cmdSplit) {
     size_t findPipe;
     int pipeTimes;
     pid_t pid;
@@ -383,8 +388,8 @@ void CmdProcess(vector<string> cmdSplit) {
 
         // First Need to check whether exist stdIN, get the stdIn
         int PipeIn = -1;
-        if (PIPEMAP.find(timestamp) != PIPEMAP.end()) {
-            PipeIn = PIPEMAP[timestamp].PipeFdNumber[0];
+        if (CLIENTMAP[clientID].PIPEMAP.find(CLIENTMAP[clientID].timestamp) != CLIENTMAP[clientID].PIPEMAP.end()) {
+            PipeIn = CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[0];
         }
         
         for (int y = 0; y < numberOfGeneralCmds; ++y) {
@@ -397,8 +402,8 @@ void CmdProcess(vector<string> cmdSplit) {
             // If current is the NumPipeCmd
             if (OneCmdPack.Is_NumPipeCmd) {
                 pipeTimes = OneCmdPack.PipeN;
-                if (PIPEMAP.find(timestamp + pipeTimes) == PIPEMAP.end())
-                    pipe(PIPEMAP[timestamp + pipeTimes].PipeFdNumber);
+                if (CLIENTMAP[clientID].PIPEMAP.find(CLIENTMAP[clientID].timestamp + pipeTimes) == CLIENTMAP[clientID].PIPEMAP.end())
+                    pipe(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp + pipeTimes].PipeFdNumber);
             }
             // else if pre is the PipeCmd, Make a pipe
             else if (y != numberOfGeneralCmds - 1) {
@@ -410,11 +415,11 @@ void CmdProcess(vector<string> cmdSplit) {
             }
             // child exec Cmd here.
             if (pid == 0) {
-                childProcess(OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList);
+                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList);
             }
             // parent wait for child done.
             else if (pid > 0) {
-                parentProcess(OneCmdPack, y, CmdPipeList, pipeTimes);
+                parentProcess(clientID, OneCmdPack, y, CmdPipeList, pipeTimes);
                 if (OneCmdPack.Is_NumPipeCmd) {
                     // PIPEMAP[timestamp + pipeTimes].PipeFromPids.push_back(pid);
                     usleep(1000*200);
@@ -426,7 +431,7 @@ void CmdProcess(vector<string> cmdSplit) {
                 }
             }           
         }
-        timestamp++;
+        CLIENTMAP[clientID].timestamp++;
     }
     return;
 }
@@ -435,8 +440,8 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
     vector<string> cmdSplit;
     char retMessage[BUFSIZE];
     memset(retMessage, 0, BUFSIZE);
-    int currentID = getIDFromSock(clientfd);
-    init(currentID);
+    int clientID = getIDFromSock(clientfd);
+    init(clientID);
     
     cmdSplit = splitLineSpace(cmd);
     if (cmdSplit.size() == 0)
@@ -445,6 +450,7 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
     string BIN = cmdSplit[0];
     string PATH = cmdSplit.size() >= 2 ? cmdSplit[1] : "";
     string third = cmdSplit.size() >= 3 ? cmdSplit[2] : "";
+
     if (BIN == "printenv") {
         if (PATH == "")
             return 0;
@@ -462,13 +468,26 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
         if (PATH == "" || third == "")
             return 0;
         setenv(PATH.c_str(), third.c_str(), 1);
-        CLIENTMAP[currentID].envs[PATH] = third;
+        CLIENTMAP[clientID].envs[PATH] = third;
+    }
+    else if (BIN == "who") {
+        who(clientID);
+    }
+    else if (BIN == "tell") {
+        tell(clientID, stoi(PATH) ,vector2String(cmdSplit, 2));
+    }
+    else if (BIN == "yell") {
+        yell(clientID, vector2String(cmdSplit, 1));
+    }
+    else if (BIN == "name") {
+        if (PATH == "") return 0;
+        name(clientID, PATH);
     }
     else {
-        CmdProcess(cmdSplit);
-        timestamp--;
+        CmdProcess(clientID, cmdSplit);
+        CLIENTMAP[clientID].timestamp--;
     }
-    timestamp++;
+    CLIENTMAP[clientID].timestamp++;
     return 0;
 }
 
@@ -532,7 +551,6 @@ void init(int ID) {
     for (auto env : CLIENTMAP[ID].envs) {
         setenv(env.first.c_str(), env.second.c_str(), 1);
     }
-    timestamp = 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -615,6 +633,7 @@ int main(int argc, char *argv[]) {
         for (fd = 0; fd < nfds; fd++) {
             if (fd != msock && FD_ISSET(fd, &rfds)) {
                 char message[BUFSIZE];
+                memset(message, 0, BUFSIZE);
                 // read message & process request
                 int readstate;
                 if ((readstate = read(fd, message, BUFSIZE)) < 0) {
