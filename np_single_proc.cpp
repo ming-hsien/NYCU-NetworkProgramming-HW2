@@ -243,15 +243,15 @@ int getUserPipefromWho(vector<string> cmdLineVec) {
 }
 
 int getUserPipeToWho(vector<string> cmdLineVec) {
-    int ToWho = 0;
+    int toWho = 0;
     for (int i = 0; i < cmdLineVec.size(); i++) {
         if (cmdLineVec[i][0] == '>') {
             for (int k = 1; k < cmdLineVec[i].size(); k++) {
-                ToWho = ToWho * 10 + (cmdLineVec[i][k] - '0');
+                toWho = toWho * 10 + (cmdLineVec[i][k] - '0');
             }
         }
     }
-    return ToWho;
+    return toWho;
 }
 
 void BroadcastMessage(string msg) {
@@ -302,16 +302,15 @@ CMDtype pareseOneCmd(string Cmd) {
         CmdPack.writePath = v[v.size() - 1];
         v.pop_back();
         v.pop_back();
-        CmdPack.param = v;
     }
-    else 
-        CmdPack.param = v;
     if (CmdPack.Is_ReadUserPipe) {
         v.pop_back();
     }
     if (CmdPack.Is_WriteUserPipe) {
         v.pop_back();
     }
+
+    CmdPack.param = v;
 
     for (const auto &c : CmdPack.param) CmdPack.CmdStr = CmdPack.CmdStr + " " + c;
     return CmdPack;
@@ -348,6 +347,7 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
     }
     else if (OneCmdPack.Is_WriteUserPipe) {
         int writeTo = OneCmdPack.UserPipeTo;
+        cout << CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1] << endl;
         dup2(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1], STDOUT_FILENO);
     }
     else {
@@ -370,7 +370,7 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
         close(userpipe.second.PipeFdNumber[0]);
         close(userpipe.second.PipeFdNumber[1]);
     }
-
+    
     // Execute the Command
     vector<string> bufVec = OneCmdPack.param;
     bufVec.insert(bufVec.begin(), OneCmdPack.BIN);
@@ -378,6 +378,8 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
     int e = execvp(argv[0], argv);
 
     if(e == -1) {
+        string test = vector2String(bufVec);
+        write(CLIENTMAP[clientID].SOCK, test.c_str(), test.size());
         cerr << "Unknown command: [" << OneCmdPack.BIN << "].\n";
     }
     // execvp sucessfully
@@ -418,10 +420,6 @@ void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeL
         close(CLIENTMAP[clientID].USERPIPEMAP[OneCmdPack.UserPipeFrom].PipeFdNumber[0]);
         close(CLIENTMAP[clientID].USERPIPEMAP[OneCmdPack.UserPipeFrom].PipeFdNumber[1]);
         CLIENTMAP[clientID].USERPIPEMAP.erase(OneCmdPack.UserPipeFrom);
-    }
-    if (OneCmdPack.Is_WriteUserPipe) {
-        close(CLIENTMAP[OneCmdPack.UserPipeTo].USERPIPEMAP[clientID].PipeFdNumber[0]);
-        close(CLIENTMAP[OneCmdPack.UserPipeTo].USERPIPEMAP[clientID].PipeFdNumber[1]);
     }
 }
 
