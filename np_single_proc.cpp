@@ -4,6 +4,7 @@
 #include <map>
 #include <vector>
 #include <queue>
+#include <regex>
 
 #include <stdio.h>
 #include <sys/wait.h>
@@ -29,6 +30,10 @@ struct PipeFd {
     int PipeFdNumber[2] = {-1, -1};
 };
 
+struct UserPipeFd {
+    int PipeFdNumber[2] = {-1, -1};
+};
+
 struct Client {
     char IP[INET_ADDRSTRLEN];
     int ID = -1;
@@ -37,6 +42,7 @@ struct Client {
     map<string, string> envs;
     string username = "(no name)";
     map<int, PipeFd> PIPEMAP;
+    map<int, UserPipeFd> USERPIPEMAP; // key = who want to send me message, value = pipe to read message.
     int timestamp = 0;
 };
 
@@ -50,6 +56,11 @@ struct CMDtype {
     string writePath = "";
     bool Is_NumPipeCmd = false;
     string CmdStr = "";
+    // This is for user pipe! if some body want to 
+    bool Is_ReadUserPipe = false;
+    bool Is_WriteUserPipe = false;
+    int UserPipeTo = 0;
+    int UserPipeFrom = 0;
 };
 
 // key is client user id
@@ -84,9 +95,19 @@ bool isErrorPipeCmd(string Cmd) {
 }
 
 bool isFileRedirectCmd(string Cmd) {
-    if (Cmd.find('>') != string::npos)
+    if (Cmd.find(" > ") != string::npos)
         return true;
     return false;
+}
+
+bool isReadUserPipe(string Cmd) {
+    regex reg(".*<[0-9]+(.|\n)*");
+    return regex_match(Cmd, reg);
+}
+
+bool isWriteUserPipe(string Cmd) {
+    regex reg(".*>[0-9]+(.|\n)*");
+    return regex_match(Cmd, reg);
 }
 
 string vector2String(vector<string> v, int fromwhere = 0) {
@@ -179,7 +200,7 @@ vector<string> splitLineSpace(string cmd) {
     return v;
 }
 
-char **stringToCharPointer(vector<string> &src) {
+char **vectorToCharPointer(vector<string> &src) {
 	int argc = src.size();
 	char **argv = new char*[argc+1]; 
 	for(int i = 0; i < argc; i++){
@@ -209,6 +230,30 @@ int getPipeTimes(string cmdLine) {
     return PipeTimes;
 }
 
+int getUserPipefromWho(vector<string> cmdLineVec) {
+    int fromWho = 0;
+    for (int i = 0; i < cmdLineVec.size(); i++) {
+        if (cmdLineVec[i][0] == '<') {
+            for (int k = 1; k < cmdLineVec[i].size(); k++) {
+                fromWho = fromWho * 10 + (cmdLineVec[i][k] - '0');
+            }
+        }
+    }
+    return fromWho;
+}
+
+int getUserPipeToWho(vector<string> cmdLineVec) {
+    int ToWho = 0;
+    for (int i = 0; i < cmdLineVec.size(); i++) {
+        if (cmdLineVec[i][0] == '>') {
+            for (int k = 1; k < cmdLineVec[i].size(); k++) {
+                ToWho = ToWho * 10 + (cmdLineVec[i][k] - '0');
+            }
+        }
+    }
+    return ToWho;
+}
+
 void BroadcastMessage(string msg) {
     for (auto cmap : CLIENTMAP) {
         if (write(cmap.second.SOCK, msg.c_str(), sizeof(char) * msg.length()) < 0) {
@@ -224,6 +269,8 @@ CMDtype pareseOneCmd(string Cmd) {
     CmdPack.Is_PipeCmd = isPipeCmd(Cmd);
     CmdPack.Is_FileReDirection = isFileRedirectCmd(Cmd);
     CmdPack.Is_NumPipeCmd = isNumPipeCmd(Cmd);
+    CmdPack.Is_ReadUserPipe = isReadUserPipe(Cmd);
+    CmdPack.Is_WriteUserPipe = isWriteUserPipe(Cmd);
     
     vector<string> v = splitLineSpace(Cmd);
     CmdPack.BIN = v[0];
@@ -233,6 +280,24 @@ CMDtype pareseOneCmd(string Cmd) {
         v.pop_back();
     }
     CmdPack.CmdStr += CmdPack.BIN;
+
+    // if current command is Read user pipe
+    if (CmdPack.Is_ReadUserPipe) {
+        if ((CmdPack.UserPipeFrom = getUserPipefromWho(v)) == 0) {
+            #if _DEBUG_ == 1
+            cerr << "Error : getUserPipeFrom Who error";
+            #endif
+        }
+    }
+    // if current command is Write user pipe
+    if (CmdPack.Is_WriteUserPipe) {
+        if ((CmdPack.UserPipeTo = getUserPipeToWho(v)) == 0) {
+            #if _DEBUG_ == 1
+            cerr << "Error : getUserPipeTo Who error";
+            #endif
+        }
+    }
+
     if (CmdPack.Is_FileReDirection) {
         CmdPack.writePath = v[v.size() - 1];
         v.pop_back();
@@ -241,13 +306,20 @@ CMDtype pareseOneCmd(string Cmd) {
     }
     else 
         CmdPack.param = v;
+    if (CmdPack.Is_ReadUserPipe) {
+        v.pop_back();
+    }
+    if (CmdPack.Is_WriteUserPipe) {
+        v.pop_back();
+    }
 
     for (const auto &c : CmdPack.param) CmdPack.CmdStr = CmdPack.CmdStr + " " + c;
     return CmdPack;
 }
 
-void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[]) {
+void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[], string inputCmd) {
     int fd;
+    int STDBUF = STDOUT_FILENO;
 
     // set exec stdIN
     if (CmdNumber != 0) {
@@ -259,6 +331,7 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
         else
             dup2(PipeIn, STDIN_FILENO);
     }
+    dup2(CLIENTMAP[clientID].SOCK, STDERR_FILENO);
 
     // set exec stdOUT
     if (OneCmdPack.Is_NumPipeCmd) {
@@ -273,8 +346,12 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
     else if (CmdNumber < numberOfGeneralCmds - 1) {
         dup2(CmdPipeList[CmdNumber * 2 + 1], STDOUT_FILENO);
     }
+    else if (OneCmdPack.Is_WriteUserPipe) {
+        int writeTo = OneCmdPack.UserPipeTo;
+        dup2(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1], STDOUT_FILENO);
+    }
     else {
-        dup2(STDOUT_FILENO, STDOUT_FILENO);
+        dup2(CLIENTMAP[clientID].SOCK, STDOUT_FILENO);
     }
 
     // Close the Command Pipe List
@@ -288,14 +365,36 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
         close(numberpipe.second.PipeFdNumber[1]);
     }
 
+    // Close User Pipe
+    for (auto userpipe : CLIENTMAP[clientID].USERPIPEMAP) {
+        close(userpipe.second.PipeFdNumber[0]);
+        close(userpipe.second.PipeFdNumber[1]);
+    }
+
     // Execute the Command
     vector<string> bufVec = OneCmdPack.param;
     bufVec.insert(bufVec.begin(), OneCmdPack.BIN);
-    char **argv = stringToCharPointer(bufVec);
+    char **argv = vectorToCharPointer(bufVec);
     int e = execvp(argv[0], argv);
 
-    if(e == -1)
+    if(e == -1) {
         cerr << "Unknown command: [" << OneCmdPack.BIN << "].\n";
+    }
+    // execvp sucessfully
+    else {
+        // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
+        if (OneCmdPack.Is_WriteUserPipe) {
+            string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
+                    + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
+            BroadcastMessage(bmsg);
+        }
+        // Case : Read pipe sucessfully, output *** <receiver_name> (#<receiver_id>) just received from <sender_name> (#<sender_id>) by ’<command>’ ***
+        if (OneCmdPack.Is_ReadUserPipe) {
+            string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just received from "\
+                    + CLIENTMAP[OneCmdPack.UserPipeFrom].username + " (#" + to_string(OneCmdPack.UserPipeFrom) + ") by '" + inputCmd + "' ***\n";
+            BroadcastMessage(bmsg);
+        }
+    }
     exit(0);
 }
 
@@ -313,6 +412,16 @@ void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeL
         close(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[0]);
         close(CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[1]);
         CLIENTMAP[clientID].PIPEMAP.erase(CLIENTMAP[clientID].timestamp);
+    }
+
+    if (OneCmdPack.Is_ReadUserPipe) {
+        close(CLIENTMAP[clientID].USERPIPEMAP[OneCmdPack.UserPipeFrom].PipeFdNumber[0]);
+        close(CLIENTMAP[clientID].USERPIPEMAP[OneCmdPack.UserPipeFrom].PipeFdNumber[1]);
+        CLIENTMAP[clientID].USERPIPEMAP.erase(OneCmdPack.UserPipeFrom);
+    }
+    if (OneCmdPack.Is_WriteUserPipe) {
+        close(CLIENTMAP[OneCmdPack.UserPipeTo].USERPIPEMAP[clientID].PipeFdNumber[0]);
+        close(CLIENTMAP[OneCmdPack.UserPipeTo].USERPIPEMAP[clientID].PipeFdNumber[1]);
     }
 }
 
@@ -372,14 +481,18 @@ void name(int userID, string newname) {
     }
 }
 
-void CmdProcess(int clientID, vector<string> cmdSplit) {
+// return > 0 means current command is a legal command, else id illegal
+int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
     size_t findPipe;
     int pipeTimes;
     pid_t pid;
     vector<string> cmdVec = splitLine2EachCmd(cmdSplit);
+
+    // here to get per command => ex. if command : ls |1 number | cat => 1. (ls |1 ) 2. (number | cat )
     for (int i = 0; i < cmdVec.size(); i++) {
         string currentCmd = cmdVec[i];
         
+        // here to get normal command (split general pipe) ex. if command : ls | cat => 1. (ls |) 2. (cat)
         vector<string> GeneralOrNonOrNumPipeCmds = splitEachCmd2GeneralOrNonOrNumPipeCmds(currentCmd);
         int numberOfGeneralCmds = GeneralOrNonOrNumPipeCmds.size();
 
@@ -397,7 +510,8 @@ void CmdProcess(int clientID, vector<string> cmdSplit) {
 
             string OneCmd = GeneralOrNonOrNumPipeCmds[y];
             CMDtype OneCmdPack = pareseOneCmd(OneCmd);
-
+            // cout << "PipeFromWho: " << OneCmdPack.UserPipeFrom << " PipeToWho: " <<  OneCmdPack.UserPipeTo << endl;
+            
             // Build Pipe
             // If current is the NumPipeCmd
             if (OneCmdPack.Is_NumPipeCmd) {
@@ -409,13 +523,48 @@ void CmdProcess(int clientID, vector<string> cmdSplit) {
             else if (y != numberOfGeneralCmds - 1) {
                 pipe(CmdPipeList + y * 2);
             }
+            
+            if (OneCmdPack.Is_ReadUserPipe && PipeIn == -1) {
+                // Case : pipe does not exist, output *** Error: the pipe #<sender_id>->#<receiver_id> does not exist yet. ***
+                int readFrom = OneCmdPack.UserPipeFrom;
+                if (CLIENTMAP[clientID].USERPIPEMAP.find(readFrom) == CLIENTMAP[clientID].USERPIPEMAP.end()) {
+                    string msg = "** Error: the pipe #" + to_string(readFrom) + "->#" + to_string(clientID) + " does not exist yet. ***\n";
+                    write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    CLIENTMAP[clientID].timestamp++;
+                    return 1;
+                }
+                
+                PipeIn = CLIENTMAP[clientID].USERPIPEMAP[readFrom].PipeFdNumber[0];
+            }
+
+            // Process Write User Pipe Case : >{client N}
+            if (OneCmdPack.Is_WriteUserPipe) {
+                int writeTo = OneCmdPack.UserPipeTo;
+                // Case : Receiver does not exist, output "*** Error: user #<user_id> does not exist yet. ***"
+                if (CLIENTMAP.find(writeTo) == CLIENTMAP.end()) {
+                    string msg = "*** Error: user #" + to_string(writeTo) + " does not exist yet. ***\n";
+                    write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    CLIENTMAP[clientID].timestamp++;
+                    return 1;
+                }
+                // Case : User pipe already exists, output "*** Error: the pipe #<sender_id>->#<receiver_id> already exists. ***"
+                else if (CLIENTMAP[writeTo].USERPIPEMAP.find(clientID) != CLIENTMAP[writeTo].USERPIPEMAP.end()) {
+                    string msg = "*** Error: the pipe #" + to_string(clientID) + "->#" + to_string(writeTo) + " already exists. ***\n";
+                    write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    CLIENTMAP[clientID].timestamp++;
+                    return 1;
+                }
+                else {
+                    pipe(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber);
+                }
+            }
 
             while((pid = fork()) < 0) {
                 waitpid(-1, NULL, 0);
             }
             // child exec Cmd here.
             if (pid == 0) {
-                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList);
+                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList, inputCmd);
             }
             // parent wait for child done.
             else if (pid > 0) {
@@ -429,11 +578,11 @@ void CmdProcess(int clientID, vector<string> cmdSplit) {
                     if (y == numberOfGeneralCmds - 1)
                         waitpid(pid, NULL, 0);
                 }
-            }           
+            }
         }
         CLIENTMAP[clientID].timestamp++;
     }
-    return;
+    return 1;
 }
 
 int runNpShell(int clientfd, char cmd[BUFSIZE]) {
@@ -446,7 +595,7 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
     cmdSplit = splitLineSpace(cmd);
     if (cmdSplit.size() == 0)
         return 0;
-
+    string inputCmd = vector2String(cmdSplit);
     string BIN = cmdSplit[0];
     string PATH = cmdSplit.size() >= 2 ? cmdSplit[1] : "";
     string third = cmdSplit.size() >= 3 ? cmdSplit[2] : "";
@@ -484,7 +633,7 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
         name(clientID, PATH);
     }
     else {
-        CmdProcess(clientID, cmdSplit);
+        if (CmdProcess(clientID, cmdSplit, inputCmd) < 0) {return 0;}
         CLIENTMAP[clientID].timestamp--;
     }
     CLIENTMAP[clientID].timestamp++;
@@ -619,7 +768,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        // Master sock (msock) detect New client coming
+        // Master sock (msock) detect if New client coming
         if (FD_ISSET(msock, &rfds)) {
             ssock = accept(msock, (struct sockaddr *) &clientAddress, &clientAddressLength);
             if (ssock < 0) perror("accept");
@@ -629,7 +778,7 @@ int main(int argc, char *argv[]) {
             numClient++;
         }
         
-        // start serve each client for who have send nessage
+        // start serve each client for who have send message
         for (fd = 0; fd < nfds; fd++) {
             if (fd != msock && FD_ISSET(fd, &rfds)) {
                 char message[BUFSIZE];
