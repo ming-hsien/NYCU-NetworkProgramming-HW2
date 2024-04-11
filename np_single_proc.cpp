@@ -24,6 +24,7 @@ using namespace std;
 
 int status;
 int SERV_TCP_PORT = 7001;
+const int FD_NULL = open("/dev/null", O_RDWR);
 
 struct PipeFd {
     vector<pid_t> PipeFromPids;
@@ -325,7 +326,7 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
         dup2(CmdPipeList[(CmdNumber - 1) * 2], STDIN_FILENO);
     }
     else {
-        if (PipeIn == -1)
+        if (PipeIn == -2)
             dup2(STDIN_FILENO, STDIN_FILENO);
         else
             dup2(PipeIn, STDIN_FILENO);
@@ -385,20 +386,6 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
 
 void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes, string inputCmd) {
     waitpid(-1, &status, WNOHANG);
-
-    // execvp sucessfully
-    // Case : Read pipe sucessfully, output *** <receiver_name> (#<receiver_id>) just received from <sender_name> (#<sender_id>) by ’<command>’ ***
-    if (OneCmdPack.Is_ReadUserPipe) {
-        string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just received from "\
-                + CLIENTMAP[OneCmdPack.UserPipeFrom].username + " (#" + to_string(OneCmdPack.UserPipeFrom) + ") by '" + inputCmd + "' ***\n";
-        BroadcastMessage(bmsg);
-    }
-    // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
-    if (OneCmdPack.Is_WriteUserPipe) {
-        string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
-                + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
-        BroadcastMessage(bmsg);
-    }
     
     if (CmdNumber > 0) {
         close(CmdPipeList[(CmdNumber - 1) * 2]);
@@ -439,8 +426,8 @@ void who(int ID) {
 void tell(int fromID, int toWhoID, string msg) {
     // Not Found specific client
     if (CLIENTMAP.find(toWhoID) == CLIENTMAP.end()) {
-        string NotFoundMsg = "*** Error: user #" + to_string(toWhoID) + "does not exist yet. ***\n";
-        write(fromID, NotFoundMsg.c_str(), BUFSIZE);
+        string NotFoundMsg = "*** Error: user #" + to_string(toWhoID) + " does not exist yet. ***\n";
+        write(CLIENTMAP[fromID].SOCK, NotFoundMsg.c_str(), sizeof(char) * NotFoundMsg.length());
     }
     // Find and send msg to specific client
     else {
@@ -496,7 +483,7 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
         memset(CmdPipeList, -1, sizeof(CmdPipeList));
 
         // First Need to check whether exist stdIN, get the stdIn
-        int PipeIn = -1;
+        int PipeIn = -2;
         if (CLIENTMAP[clientID].PIPEMAP.find(CLIENTMAP[clientID].timestamp) != CLIENTMAP[clientID].PIPEMAP.end()) {
             PipeIn = CLIENTMAP[clientID].PIPEMAP[CLIENTMAP[clientID].timestamp].PipeFdNumber[0];
         }
@@ -519,18 +506,28 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
             else if (y != numberOfGeneralCmds - 1) {
                 pipe(CmdPipeList + y * 2);
             }
-            
-            if (OneCmdPack.Is_ReadUserPipe && PipeIn == -1) {
-                // Case : pipe does not exist, output *** Error: the pipe #<sender_id>->#<receiver_id> does not exist yet. ***
+
+            if (OneCmdPack.Is_ReadUserPipe && PipeIn == -2) {
                 int readFrom = OneCmdPack.UserPipeFrom;
-                if (CLIENTMAP[clientID].USERPIPEMAP.find(readFrom) == CLIENTMAP[clientID].USERPIPEMAP.end()) {
+                // Case : sender client does not exist yet, output *** Error: user #<sender_id> does not exist yet. ***
+                if (CLIENTMAP.find(readFrom) == CLIENTMAP.end()) {
+                    string msg = "*** Error: user #" + to_string(readFrom) + " does not exist yet. ***\n";
+                    write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    PipeIn = FD_NULL;
+                }
+                // Case : pipe does not exist, output *** Error: the pipe #<sender_id>->#<receiver_id> does not exist yet. ***
+                else if (CLIENTMAP[clientID].USERPIPEMAP.find(readFrom) == CLIENTMAP[clientID].USERPIPEMAP.end()) {
                     string msg = "** Error: the pipe #" + to_string(readFrom) + "->#" + to_string(clientID) + " does not exist yet. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
-                    CLIENTMAP[clientID].timestamp++;
-                    return 1;
+                    PipeIn = FD_NULL;
                 }
-                
-                PipeIn = CLIENTMAP[clientID].USERPIPEMAP[readFrom].PipeFdNumber[0];
+                else {
+                    // Case : Read pipe sucessfully, output *** <receiver_name> (#<receiver_id>) just received from <sender_name> (#<sender_id>) by ’<command>’ ***
+                    string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just received from "\
+                            + CLIENTMAP[OneCmdPack.UserPipeFrom].username + " (#" + to_string(OneCmdPack.UserPipeFrom) + ") by '" + inputCmd + "' ***\n";
+                    BroadcastMessage(bmsg);
+                    PipeIn = CLIENTMAP[clientID].USERPIPEMAP[readFrom].PipeFdNumber[0];
+                }
             }
 
             // Process Write User Pipe Case : >{client N}
@@ -540,17 +537,19 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
                 if (CLIENTMAP.find(writeTo) == CLIENTMAP.end()) {
                     string msg = "*** Error: user #" + to_string(writeTo) + " does not exist yet. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
-                    CLIENTMAP[clientID].timestamp++;
-                    return 1;
                 }
                 // Case : User pipe already exists, output "*** Error: the pipe #<sender_id>->#<receiver_id> already exists. ***"
                 else if (CLIENTMAP[writeTo].USERPIPEMAP.find(clientID) != CLIENTMAP[writeTo].USERPIPEMAP.end()) {
                     string msg = "*** Error: the pipe #" + to_string(clientID) + "->#" + to_string(writeTo) + " already exists. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
-                    CLIENTMAP[clientID].timestamp++;
-                    return 1;
                 }
                 else {
+                    // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
+                    if (OneCmdPack.Is_WriteUserPipe) {
+                        string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
+                                + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
+                        BroadcastMessage(bmsg);
+                    }
                     pipe(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber);
                 }
             }
@@ -799,7 +798,12 @@ int main(int argc, char *argv[]) {
                         int ID = getIDFromSock(fd);
                         string msg = "*** User '" + CLIENTMAP[ID].username + "' left. ***\n";
                         BroadcastMessage(msg);
-                        CLIENTMAP.erase(getIDFromSock(fd));
+                        for (auto cmap : CLIENTMAP) {
+                            if (cmap.second.USERPIPEMAP.find(ID) != cmap.second.USERPIPEMAP.end()) {
+                                cmap.second.USERPIPEMAP.erase(ID);
+                            }
+                        }
+                        CLIENTMAP.erase(ID);
                         (void)close(fd);
                         FD_CLR(fd, &afds);
                         numClient--;
