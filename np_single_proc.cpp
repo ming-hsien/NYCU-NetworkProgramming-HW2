@@ -316,7 +316,7 @@ CMDtype pareseOneCmd(string Cmd) {
     return CmdPack;
 }
 
-void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[], string inputCmd) {
+void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[]) {
     int fd;
     int STDBUF = STDOUT_FILENO;
 
@@ -347,7 +347,6 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
     }
     else if (OneCmdPack.Is_WriteUserPipe) {
         int writeTo = OneCmdPack.UserPipeTo;
-        cout << CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1] << endl;
         dup2(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1], STDOUT_FILENO);
     }
     else {
@@ -379,29 +378,28 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
 
     if(e == -1) {
         string test = vector2String(bufVec);
-        write(CLIENTMAP[clientID].SOCK, test.c_str(), test.size());
         cerr << "Unknown command: [" << OneCmdPack.BIN << "].\n";
-    }
-    // execvp sucessfully
-    else {
-        // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
-        if (OneCmdPack.Is_WriteUserPipe) {
-            string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
-                    + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
-            BroadcastMessage(bmsg);
-        }
-        // Case : Read pipe sucessfully, output *** <receiver_name> (#<receiver_id>) just received from <sender_name> (#<sender_id>) by ’<command>’ ***
-        if (OneCmdPack.Is_ReadUserPipe) {
-            string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just received from "\
-                    + CLIENTMAP[OneCmdPack.UserPipeFrom].username + " (#" + to_string(OneCmdPack.UserPipeFrom) + ") by '" + inputCmd + "' ***\n";
-            BroadcastMessage(bmsg);
-        }
     }
     exit(0);
 }
 
-void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes) {
+void parentProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes, string inputCmd) {
     waitpid(-1, &status, WNOHANG);
+
+    // execvp sucessfully
+    // Case : Read pipe sucessfully, output *** <receiver_name> (#<receiver_id>) just received from <sender_name> (#<sender_id>) by ’<command>’ ***
+    if (OneCmdPack.Is_ReadUserPipe) {
+        string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just received from "\
+                + CLIENTMAP[OneCmdPack.UserPipeFrom].username + " (#" + to_string(OneCmdPack.UserPipeFrom) + ") by '" + inputCmd + "' ***\n";
+        BroadcastMessage(bmsg);
+    }
+    // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
+    if (OneCmdPack.Is_WriteUserPipe) {
+        string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
+                + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
+        BroadcastMessage(bmsg);
+    }
+    
     if (CmdNumber > 0) {
         close(CmdPipeList[(CmdNumber - 1) * 2]);
         close(CmdPipeList[(CmdNumber - 1) * 2 + 1]);
@@ -562,11 +560,11 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
             }
             // child exec Cmd here.
             if (pid == 0) {
-                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList, inputCmd);
+                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList);
             }
             // parent wait for child done.
             else if (pid > 0) {
-                parentProcess(clientID, OneCmdPack, y, CmdPipeList, pipeTimes);
+                parentProcess(clientID, OneCmdPack, y, CmdPipeList, pipeTimes, inputCmd);
                 if (OneCmdPack.Is_NumPipeCmd) {
                     // PIPEMAP[timestamp + pipeTimes].PipeFromPids.push_back(pid);
                     usleep(1000*200);
