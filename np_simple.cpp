@@ -269,7 +269,7 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
     exit(0);
 }
 
-void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes) {
+void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pipeTimes, int newsockfd) {
     waitpid(-1, &status, WNOHANG);
     if (CmdNumber > 0) {
         close(CmdPipeList[(CmdNumber - 1) * 2]);
@@ -284,16 +284,18 @@ void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pip
         close(PIPEMAP[timestamp].PipeFdNumber[1]);
         PIPEMAP.erase(timestamp);
     }
+    dup2(newsockfd, STDIN_FILENO);
+    dup2(newsockfd, STDOUT_FILENO);
+    dup2(newsockfd, STDERR_FILENO);
 }
 
-void CmdProcess(vector<string> cmdSplit) {
+void CmdProcess(vector<string> cmdSplit, int newsockfd) {
     size_t findPipe;
     int pipeTimes;
     pid_t pid;
     vector<string> cmdVec = splitLine2EachCmd(cmdSplit);
     for (int i = 0; i < cmdVec.size(); i++) {
         string currentCmd = cmdVec[i];
-        
         vector<string> GeneralOrNonOrNumPipeCmds = splitEachCmd2GeneralOrNonOrNumPipeCmds(currentCmd);
         int numberOfGeneralCmds = GeneralOrNonOrNumPipeCmds.size();
 
@@ -333,7 +335,7 @@ void CmdProcess(vector<string> cmdSplit) {
             }
             // parent wait for child done.
             else if (pid > 0) {
-                parentProcess(OneCmdPack, y, CmdPipeList, pipeTimes);
+                parentProcess(OneCmdPack, y, CmdPipeList, pipeTimes, newsockfd);
                 if (OneCmdPack.Is_NumPipeCmd) {
                     // PIPEMAP[timestamp + pipeTimes].PipeFromPids.push_back(pid);
                     usleep(1000*200);
@@ -350,7 +352,7 @@ void CmdProcess(vector<string> cmdSplit) {
     return;
 }
 
-void runNpShell() {
+void runNpShell(int newsockfd) {
     char cmd[MAXLINE];
     vector<string> cmdSplit;
     int n;
@@ -379,11 +381,12 @@ void runNpShell() {
             setenv(PATH.c_str(), third.c_str(), 1);
         }
         else {
-            CmdProcess(cmdSplit);
+            CmdProcess(cmdSplit, newsockfd);
             timestamp--;
         }
         cout << "% ";
         timestamp++;
+        memset(cmd, 0, MAXLINE);
     }
 }
 
@@ -432,18 +435,18 @@ int main(int argc, char *argv[]) {
     
     for ( ; ; ) {
         clilen = sizeof(cli_addr);
-        dup2(0, 4);
-        dup2(1, 5);
-        dup2(2, 6);
+        dup2(STDIN_FILENO, 4);
+        dup2(STDOUT_FILENO, 5);
+        dup2(STDERR_FILENO, 6);
         newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd < 0) cerr << "server: accept error" << endl;
         dup2(newsockfd, 0);
         dup2(newsockfd, 1);
         dup2(newsockfd, 2);
-        runNpShell();
-        dup2(4, 0);
-        dup2(5, 1);
-        dup2(6, 2);
+        runNpShell(newsockfd);
+        dup2(4, STDIN_FILENO);
+        dup2(5, STDOUT_FILENO);
+        dup2(6, STDERR_FILENO);
         close(newsockfd);
     }
     return 0;
