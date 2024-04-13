@@ -317,7 +317,7 @@ CMDtype pareseOneCmd(string Cmd) {
     return CmdPack;
 }
 
-void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[]) {
+void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, int PipeIn, int CmdPipeList[], bool writeSucess) {
     int fd;
     int STDBUF = STDOUT_FILENO;
 
@@ -347,8 +347,13 @@ void childProcess(int clientID, CMDtype OneCmdPack, int CmdNumber, int numberOfG
         dup2(CmdPipeList[CmdNumber * 2 + 1], STDOUT_FILENO);
     }
     else if (OneCmdPack.Is_WriteUserPipe) {
-        int writeTo = OneCmdPack.UserPipeTo;
-        dup2(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1], STDOUT_FILENO);
+        if (!writeSucess) {
+            dup2(FD_NULL, STDOUT_FILENO);
+        }
+        else {
+            int writeTo = OneCmdPack.UserPipeTo;
+            dup2(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber[1], STDOUT_FILENO);
+        }
     }
     else {
         dup2(CLIENTMAP[clientID].SOCK, STDOUT_FILENO);
@@ -517,7 +522,7 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
                 }
                 // Case : pipe does not exist, output *** Error: the pipe #<sender_id>->#<receiver_id> does not exist yet. ***
                 else if (CLIENTMAP[clientID].USERPIPEMAP.find(readFrom) == CLIENTMAP[clientID].USERPIPEMAP.end()) {
-                    string msg = "** Error: the pipe #" + to_string(readFrom) + "->#" + to_string(clientID) + " does not exist yet. ***\n";
+                    string msg = "*** Error: the pipe #" + to_string(readFrom) + "->#" + to_string(clientID) + " does not exist yet. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
                     PipeIn = FD_NULL;
                 }
@@ -531,23 +536,26 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
             }
 
             // Process Write User Pipe Case : >{client N}
+            bool writeSucess = true;
             if (OneCmdPack.Is_WriteUserPipe) {
                 int writeTo = OneCmdPack.UserPipeTo;
                 // Case : Receiver does not exist, output "*** Error: user #<user_id> does not exist yet. ***"
                 if (CLIENTMAP.find(writeTo) == CLIENTMAP.end()) {
                     string msg = "*** Error: user #" + to_string(writeTo) + " does not exist yet. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    writeSucess = false;
                 }
                 // Case : User pipe already exists, output "*** Error: the pipe #<sender_id>->#<receiver_id> already exists. ***"
                 else if (CLIENTMAP[writeTo].USERPIPEMAP.find(clientID) != CLIENTMAP[writeTo].USERPIPEMAP.end()) {
                     string msg = "*** Error: the pipe #" + to_string(clientID) + "->#" + to_string(writeTo) + " already exists. ***\n";
                     write(CLIENTMAP[clientID].SOCK, msg.c_str(), sizeof(char) * msg.length());
+                    writeSucess = false;
                 }
                 else {
                     // Case : Write pipe sucessfully, output *** <sender_name> (#<sender_id>) just piped ’<command>’ to <receiver_name> (#<receiver_id>) ***
                     if (OneCmdPack.Is_WriteUserPipe) {
                         string bmsg = "*** " + CLIENTMAP[clientID].username + " (#" + to_string(clientID) + ") just piped '"\
-                                + inputCmd + " to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
+                                + inputCmd + "' to " + CLIENTMAP[OneCmdPack.UserPipeTo].username + " (#" + to_string(OneCmdPack.UserPipeTo) + ") ***\n";
                         BroadcastMessage(bmsg);
                     }
                     pipe(CLIENTMAP[writeTo].USERPIPEMAP[clientID].PipeFdNumber);
@@ -559,7 +567,7 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
             }
             // child exec Cmd here.
             if (pid == 0) {
-                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList);
+                childProcess(clientID, OneCmdPack, y, numberOfGeneralCmds, PipeIn, CmdPipeList, writeSucess);
             }
             // parent wait for child done.
             else if (pid > 0) {
@@ -582,8 +590,8 @@ int CmdProcess(int clientID, vector<string> cmdSplit, string inputCmd) {
 
 int runNpShell(int clientfd, char cmd[BUFSIZE]) {
     vector<string> cmdSplit;
-    char retMessage[BUFSIZE];
-    memset(retMessage, 0, BUFSIZE);
+    string retMessage = "";
+    
     int clientID = getIDFromSock(clientfd);
     init(clientID);
     
@@ -599,10 +607,9 @@ int runNpShell(int clientfd, char cmd[BUFSIZE]) {
         if (PATH == "")
             return 0;
         if (getenv(PATH.c_str()) != NULL) {
-            string retString = getenv(PATH.c_str());
-            retString += "\n";
-            strcpy(retMessage, retString.c_str());
-            write(clientfd, retMessage, BUFSIZE);
+            retMessage = getenv(PATH.c_str());
+            retMessage += "\n";
+            write(clientfd, retMessage.c_str(), sizeof(char) * retMessage.length());
         }
     }
     else if (BIN == "exit") {
@@ -674,8 +681,8 @@ int NewClientComing(sockaddr_in sa, int sock) {
     CLIENTMAP[newClient.ID] = newClient;
     
     // print hello message
-    char helloMessage[BUFSIZE] = "****************************************\n** Welcome to the information server. **\n****************************************\n";
-    if (write(sock, helloMessage, BUFSIZE) < 0) {
+    string helloMessage = "****************************************\n** Welcome to the information server. **\n****************************************\n";
+    if (write(sock, helloMessage.c_str(), sizeof(char) * helloMessage.length()) < 0) {
         perror("write");
     }
     string comingMsg = "*** User '" + newClient.username + "' entered from " + newClient.IP + ":" + to_string(newClient.INPort) + ". ***\n";
