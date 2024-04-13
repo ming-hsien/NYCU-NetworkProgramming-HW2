@@ -17,9 +17,9 @@
 
 using namespace std;
 
-#define PROCESS_LIMIT 512
+// #define PROCESS_LIMIT 512
 #define _DEBUG_ 0
-#define MAXLINE 512
+#define MAXLINE 15000
 
 int timestamp;
 int status;
@@ -284,9 +284,9 @@ void parentProcess(CMDtype OneCmdPack, int CmdNumber, int CmdPipeList[], int pip
         close(PIPEMAP[timestamp].PipeFdNumber[1]);
         PIPEMAP.erase(timestamp);
     }
-    dup2(newsockfd, STDIN_FILENO);
-    dup2(newsockfd, STDOUT_FILENO);
-    dup2(newsockfd, STDERR_FILENO);
+    // dup2(newsockfd, STDIN_FILENO);
+    // dup2(newsockfd, STDOUT_FILENO);
+    // dup2(newsockfd, STDERR_FILENO);
 }
 
 void CmdProcess(vector<string> cmdSplit, int newsockfd) {
@@ -313,7 +313,6 @@ void CmdProcess(vector<string> cmdSplit, int newsockfd) {
 
             string OneCmd = GeneralOrNonOrNumPipeCmds[y];
             CMDtype OneCmdPack = pareseOneCmd(OneCmd);
-
             // Build Pipe
             // If current is the NumPipeCmd
             if (OneCmdPack.Is_NumPipeCmd) {

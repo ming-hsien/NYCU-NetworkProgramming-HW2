@@ -18,9 +18,9 @@
 
 using namespace std;
 
-#define PROCESS_LIMIT 512
+// #define PROCESS_LIMIT 512
 #define _DEBUG_ 0
-#define BUFSIZE 4096
+#define BUFSIZE 15000
 
 int status;
 int SERV_TCP_PORT = 7001;
