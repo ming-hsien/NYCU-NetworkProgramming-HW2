@@ -3,6 +3,10 @@
         "string_view": "cpp",
         "regex": "cpp",
         "vector": "cpp",
-        "*.tcc": "cpp"
+        "*.tcc": "cpp",
+        "ostream": "cpp",
+        "string": "cpp",
+        "random": "cpp",
+        "fstream": "cpp"
     }
 }
