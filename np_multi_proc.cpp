@@ -303,6 +303,7 @@ void BroadcastMessage(string msg) {
         if (!CLIENTMAP[i].alive) continue;
         kill(CLIENTMAP[i].pid, SIGUSR1);
     }
+    usleep(2000);
 }
 
 // Process who command
@@ -802,7 +803,7 @@ int main(int argc, char *argv[]) {
     }
 
     // the second argument is backlog defines the maximum length for the queue of pending connections.
-    if (listen(sock, 3) < 0) {
+    if (listen(sock, MAX_CLIENT) < 0) {
         perror("listen");
         exit(1);
     }
@@ -857,6 +858,12 @@ int main(int argc, char *argv[]) {
                         CLIENTMAP[ClientID].alive = false;
                         string msg = "*** User '" + string(CLIENTMAP[ClientID].username) + "' left. ***\n";
                         BroadcastMessage(msg);
+                        for (int i = 1; i < MAX_CLIENT; i++) {
+                            USERPIPEMAP[i].PipeFdNumber[ClientID] = -1;
+                        }
+                        for (int i = 1; i < MAX_CLIENT; i++) {
+                            USERPIPEMAP[ClientID].PipeFdNumber[i] = -1;
+                        }
                         shmdt(CLIENTMAP);
                         shmdt(CLIENTMsg);
                         shmdt(USERPIPEMAP);

@@ -47,6 +47,7 @@ Thumbs.db
 *.flv
 *.mov
 *.wmv
+*.txt
 
 np_simple
 np_single_proc
