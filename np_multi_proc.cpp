@@ -277,6 +277,10 @@ void shudwn(int signo) {
     exit(0);
 }
 
+void signalHandler(int signo) {
+    while(waitpid(-1, &status, WNOHANG) > 0);
+}
+
 // when SIGUSR1 issue
 void outputBMsg(int signo) {
     if (signo != SIGUSR1) return;
@@ -763,6 +767,7 @@ void initSignal() {
     signal(SIGINT, shudwn);
     signal(SIGUSR1, outputBMsg);
     signal(SIGUSR2, sigFifo);
+    signal(SIGCHLD, signalHandler);
 }
 
 void init() {
