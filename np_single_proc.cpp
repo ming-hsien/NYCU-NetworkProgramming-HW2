@@ -213,6 +213,10 @@ char **vectorToCharPointer(vector<string> &src) {
 	return argv;
 }
 
+void signalHandler(int signo) {
+    while(waitpid(-1, &status, WNOHANG) > 0);
+}
+
 int getPipeTimes(string cmdLine) {
     int PipeTimes = 0;
     int CutPoint = 0;
@@ -707,7 +711,7 @@ void init(int ID) {
 int main(int argc, char *argv[]) {
     // master sock & slave sock
     int msock, ssock;
-
+    signal(SIGCHLD, signalHandler);
     // server address info
     struct sockaddr_in serverAddress;
 

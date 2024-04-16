@@ -169,6 +169,10 @@ char **stringToCharPointer(vector<string> &src) {
 	return argv;
 }
 
+void signalHandler(int signo) {
+    while(waitpid(-1, &status, WNOHANG) > 0);
+}
+
 int getPipeTimes(string cmdLine) {
     int PipeTimes = 0;
     int CutPoint = 0;
@@ -403,6 +407,8 @@ int main(int argc, char *argv[]) {
     
     bool opt = true;
     socklen_t optlen = sizeof(bool);
+
+    signal(SIGCHLD, signalHandler);
 
     if (argc > 1) {
         string port = argv[1];
