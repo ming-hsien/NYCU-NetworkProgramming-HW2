@@ -283,6 +283,19 @@ void outputBMsg(int signo) {
     cout << CLIENTMsg;
 }
 
+// signal open fifo
+void sigFifo(int signo) {
+    if (signo != SIGUSR2) return;
+    char FIFOName[20];
+    for(int i = 1; i < MAX_CLIENT; i++) {
+        if (USERPIPEMAP[i].PipeFdNumber[ClientID] == -2) {
+            memset(FIFOName, '\0', sizeof(FIFOName));
+            sprintf(FIFOName, "/tmp/userPipe-%d-%d", i, ClientID);
+            USERPIPEMAP[i].PipeFdNumber[ClientID] = open(FIFOName, O_RDONLY | O_NONBLOCK);
+        }
+    }
+}
+
 void BroadcastMessage(string msg) {
     memset(CLIENTMsg, '\0', sizeof(CLIENTMsg));
     strcpy(CLIENTMsg, msg.c_str());
@@ -438,13 +451,13 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
             dup2(FD_NULL, STDOUT_FILENO);
         }
         else {
-            cout << "Is_WriteUserPipe" << endl;
             int writeTo = OneCmdPack.UserPipeTo;
             char FIFOName[20];
             memset(FIFOName, '\0', sizeof(FIFOName));
             sprintf(FIFOName, "/tmp/userPipe-%d-%d", ClientID, writeTo);
             mkfifo(FIFOName, 0666);
-            USERPIPEMAP[ClientID].PipeFdNumber[writeTo] = 1;
+            USERPIPEMAP[ClientID].PipeFdNumber[writeTo] = -2;
+            kill(CLIENTMAP[writeTo].pid, SIGUSR2);
             int FIFOFd = open(FIFOName, O_WRONLY);
             if (FIFOFd < 0) {
                 perror("open");
@@ -452,6 +465,7 @@ void childProcess(CMDtype OneCmdPack, int CmdNumber, int numberOfGeneralCmds, in
             }
             else {
                 dup2(FIFOFd, STDOUT_FILENO);
+                close(FIFOFd);
             }
             
         }
@@ -578,11 +592,7 @@ int CmdProcess(vector<string> cmdSplit, string inputCmd) {
                     string bmsg = "*** " + string(CLIENTMAP[ClientID].username) + " (#" + to_string(ClientID) + ") just received from "\
                             + CLIENTMAP[readFrom].username + " (#" + to_string(readFrom) + ") by '" + inputCmd + "' ***\n";
                     BroadcastMessage(bmsg);
-                    char FIFOName[20];
-                    sprintf(FIFOName, "/tmp/userPipe-%d-%d", readFrom, ClientID);
-                    PipeIn = open(FIFOName, O_RDONLY | O_NONBLOCK);
-                    PipeIn = -2 ? PipeIn < 0 : PipeIn; 
-                    cout << "Is_ReadUserPipe : PipeIn = " << PipeIn << endl;
+                    PipeIn = USERPIPEMAP[readFrom].PipeFdNumber[ClientID];
                     USERPIPEMAP[readFrom].PipeFdNumber[ClientID] = -1;
                 }
             }
@@ -609,7 +619,7 @@ int CmdProcess(vector<string> cmdSplit, string inputCmd) {
                                 + inputCmd + "' to " + CLIENTMAP[writeTo].username + " (#" + to_string(writeTo) + ") ***\n";
                     BroadcastMessage(bmsg);
                 }
-            }
+            } 
 
             while((pid = fork()) < 0) {
                 waitpid(-1, NULL, 0);
@@ -640,8 +650,6 @@ int CmdProcess(vector<string> cmdSplit, string inputCmd) {
 int runNpShell(char cmd[BUFSIZE]) {
     vector<string> cmdSplit;
     string retMessage = "";
-    
-    init();
     
     cmdSplit = splitLineSpace(cmd);
     if (cmdSplit.size() == 0)
@@ -753,6 +761,7 @@ void initSharedMemory() {
 void initSignal() {
     signal(SIGINT, shudwn);
     signal(SIGUSR1, outputBMsg);
+    signal(SIGUSR2, sigFifo);
 }
 
 void init() {
@@ -846,11 +855,11 @@ int main(int argc, char *argv[]) {
                 else if (readstate >= 0) {
                     if (readstate == 0 || runNpShell(message) == -1) {
                         CLIENTMAP[ClientID].alive = false;
+                        string msg = "*** User '" + string(CLIENTMAP[ClientID].username) + "' left. ***\n";
+                        BroadcastMessage(msg);
                         shmdt(CLIENTMAP);
                         shmdt(CLIENTMsg);
                         shmdt(USERPIPEMAP);
-                        string msg = "*** User '" + string(CLIENTMAP[ClientID].username) + "' left. ***\n";
-                        BroadcastMessage(msg);
                         exit(0);
                     }
                     cout << "% ";
