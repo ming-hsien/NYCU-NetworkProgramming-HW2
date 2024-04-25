@@ -808,13 +808,13 @@ int main(int argc, char *argv[]) {
                         // Somebody exit
                         int ID = getIDFromSock(fd);
                         string msg = "*** User '" + CLIENTMAP[ID].username + "' left. ***\n";
+                        CLIENTMAP.erase(ID);
                         BroadcastMessage(msg);
                         for (auto cmap : CLIENTMAP) {
                             if (cmap.second.USERPIPEMAP.find(ID) != cmap.second.USERPIPEMAP.end()) {
                                 cmap.second.USERPIPEMAP.erase(ID);
                             }
                         }
-                        CLIENTMAP.erase(ID);
                         (void)close(fd);
                         FD_CLR(fd, &afds);
                         numClient--;
